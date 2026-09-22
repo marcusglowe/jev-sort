@@ -1,0 +1,33 @@
+{
+  "name": "jev-sort",
+  "version": "0.1.0",
+  "description": "Parallel semantic sorting with a fixed bitonic comparison network.",
+  "keywords": ["jev", "typesafe", "semantic-sort", "sorting-network", "bitonic-sort", "ai"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcusglowe/jev-sort.git"
+  },
+  "homepage": "https://github.com/marcusglowe/jev-sort#readme",
+  "bugs": {
+    "url": "https://github.com/marcusglowe/jev-sort/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "files": ["dist", "examples", "README.md", "LICENSE"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepack": "npm test"
+  },
+  "engines": {"node": ">=18"},
+  "devDependencies": {"typescript": "^5.9.3"}
+}
