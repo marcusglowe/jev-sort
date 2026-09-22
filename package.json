@@ -1,7 +1,7 @@
 {
   "name": "jev-sort",
   "version": "0.1.0",
-  "description": "Parallel semantic sorting with quicksort and bitonic algorithms.",
+  "description": "Sort any list of any size by any criteria.",
   "keywords": [
     "jev",
     "typesafe",

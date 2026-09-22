@@ -1,6 +1,8 @@
 # jev sort
 
-Parallel semantic sorting for data without a useful numeric key, powered by [Jev](https://typesafe.ai).
+**Sort any list of any size by any criteria.**
+
+Powered by [Jev](https://typesafe.ai).
 
 ```bash
 npm install jev-sort
