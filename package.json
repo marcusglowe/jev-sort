@@ -1,12 +1,13 @@
 {
   "name": "jev-sort",
   "version": "0.1.0",
-  "description": "Sort any list of any size by any criteria.",
+  "description": "Semantic sorting with O(n) Jev Score batches and optional pairwise refinement.",
   "keywords": [
     "jev",
     "typesafe",
     "semantic-sort",
-    "sorting-network",
+    "score",
+    "quicksort",
     "bitonic-sort",
     "ai"
   ],

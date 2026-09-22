@@ -42,7 +42,7 @@ export interface SortOptions<T> {
 }
 
 export interface SortStats {
-  readonly algorithm: "bitonic" | "quicksort";
+  readonly algorithm: "bitonic" | "quicksort" | "score";
   readonly inputSize: number;
   readonly waves: number;
   readonly comparisons: number;

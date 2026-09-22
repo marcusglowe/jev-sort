@@ -1,88 +1,154 @@
-import { TypeSafeClient, choice, type JsonValue } from "@typesafe-ai/sdk";
-import bitonicSortAlgorithm from "./bitonic.js";
-import quickSortAlgorithm from "./quicksort.js";
-import type { BitonicSortStats } from "./bitonic.js";
-import type { QuickSortOptions, QuickSortStats } from "./quicksort.js";
-import type { ComparisonPair, SortOptions, SortResult } from "./shared.js";
+import { TypeSafeClient } from "@typesafe-ai/sdk";
+import bitonicSort, { type BitonicSortStats } from "./bitonic.js";
+import quickSort, { type QuickSortOptions, type QuickSortStats } from "./quicksort.js";
+import scoreSort, { type ScoreSortOptions, type ScoreSortStats, type ScoreValue } from "./score.js";
+import type { BatchComparator, SortOptions, SortResult, SortStats } from "./shared.js";
 
-export interface JevClientOptions {
-  /** TypeSafe API key. Defaults to the server-side TYPESAFE_API_KEY environment variable. */
+const DEFAULT_CRITERIA = [
+  "Exceptionally weak fit for the ordering rule.",
+  "Clearly below-average fit for the ordering rule.",
+  "Mixed or roughly average fit for the ordering rule.",
+  "Clearly above-average fit for the ordering rule.",
+  "Exceptional fit for the ordering rule.",
+] as const;
+
+export interface JevClientConfig {
+  /** TypeSafe API key. Falls back to `TYPESAFE_API_KEY`. */
   readonly apiKey?: string;
   readonly model?: string;
+  readonly baseUrl?: string;
+  readonly fetch?: typeof globalThis.fetch;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly state?: Readonly<Record<string, unknown>>;
 }
 
-export interface JevSortOptions<T> extends QuickSortOptions<T> {
-  /** Convert an item to JSON-safe state before sending it to Jev. */
-  readonly serialize?: (item: T) => JsonValue;
-  /** Override the standard pairwise decision instruction. */
-  readonly instructions?: string;
+export interface JevScoreOptions extends ScoreSortOptions {
+  /** Ordered score anchors, weakest to strongest. Use concrete domain descriptions when possible. */
+  readonly criteria?: readonly string[];
+  /** Extra scoring guidance included with every item. */
+  readonly guidance?: string;
+  readonly state?: Readonly<Record<string, unknown>>;
 }
 
-export interface JevBitonicSortOptions<T> extends SortOptions<T> {
-  readonly serialize?: (item: T) => JsonValue;
-  readonly instructions?: string;
+export interface JevSortOptions<T> extends SortOptions<T> {
+  readonly state?: Readonly<Record<string, unknown>>;
+}
+export interface JevQuickSortOptions<T> extends QuickSortOptions<T> {
+  readonly state?: Readonly<Record<string, unknown>>;
 }
 
 export interface JevClient {
-  /** Sort with parallel quicksort, the default Jev Sort algorithm. */
-  jevSort<T>(items: readonly T[], orderingRule: string, options?: JevSortOptions<T>): Promise<SortResult<T, QuickSortStats>>;
-  /** Explicit alias for jevSort. */
-  quickSort<T>(items: readonly T[], orderingRule: string, options?: JevSortOptions<T>): Promise<SortResult<T, QuickSortStats>>;
-  /** Sort with the fixed bitonic network. */
-  bitonicSort<T>(items: readonly T[], orderingRule: string, options?: JevBitonicSortOptions<T>): Promise<SortResult<T, BitonicSortStats>>;
+  /** Fast default: score every item independently, then sort scores descending. */
+  jevSort<T>(items: readonly T[], orderingRule: string, options?: JevScoreOptions): Promise<SortResult<T, ScoreSortStats>>;
+  scoreSort<T>(items: readonly T[], orderingRule: string, options?: JevScoreOptions): Promise<SortResult<T, ScoreSortStats>>;
+  /** Legacy precision path: adaptive pairwise quicksort. */
+  quickSort<T>(items: readonly T[], orderingRule: string, options?: JevQuickSortOptions<T>): Promise<SortResult<T, QuickSortStats>>;
+  /** Legacy fixed-network pairwise path. */
+  bitonicSort<T>(items: readonly T[], orderingRule: string, options?: JevSortOptions<T>): Promise<SortResult<T, BitonicSortStats>>;
 }
 
-const DEFAULT_INSTRUCTIONS = "Which item belongs earlier according to `ordering_rule`? Judge only this pair.";
+function toSdkConfig(config: JevClientConfig): Record<string, unknown> {
+  return {
+    ...(config.apiKey ? { apiKey: config.apiKey } : {}),
+    ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
+    ...(config.fetch ? { fetch: config.fetch } : {}),
+    ...(config.headers ? { headers: config.headers } : {}),
+  };
+}
 
-/** Create a server-side Jev Sort client backed by TypeSafe's official SDK. */
-export function createJevClient(options: JevClientOptions = {}): JevClient {
-  const client = new TypeSafeClient({
-    apiKey: options.apiKey,
-    defaultModel: options.model ?? "jev-latest",
-  });
+function pairQuestions<T>(pairs: readonly { id: string; left: T; right: T }[]): Record<string, unknown> {
+  return Object.fromEntries(pairs.map(pair => [pair.id, {
+    type: "choice",
+    instructions: {
+      question: "Which item should appear earlier under `ordering_rule`?",
+      item_a: { value: pair.left },
+      item_b: { value: pair.right },
+    },
+    choices: ["left", "right"],
+  }]));
+}
 
-  function comparator<T>(orderingRule: string, serialize: (item: T) => JsonValue, instructions: string) {
-    const rule = orderingRule.trim();
-    if (!rule) throw new Error("orderingRule must not be empty");
-    return async (pairs: readonly ComparisonPair<T>[], context: { signal?: AbortSignal }): Promise<Readonly<Record<string, "left" | "right">>> => {
-      const questions = Object.fromEntries(pairs.map(pair => [
-        pair.id,
-        choice(instructions, {
-          left: "Item A belongs earlier than Item B.",
-          right: "Item B belongs earlier than Item A.",
-        }),
-      ]));
-      const result = await client.systemOne({
-        state: {
-          ordering_rule: rule,
-          pairs: Object.fromEntries(pairs.map(pair => [pair.id, {
-            item_a: serialize(pair.left),
-            item_b: serialize(pair.right),
-          }])),
-        },
-        questions,
-      }, { signal: context.signal });
-      return Object.fromEntries(pairs.map(pair => {
-        const selected = result.answers[pair.id]?.choice;
-        if (selected !== "left" && selected !== "right") throw new Error(`TypeSafe returned an invalid choice for ${pair.id}`);
-        return [pair.id, selected];
+function scoreQuestions<T>(
+  entries: readonly { id: string; item: T }[],
+  orderingRule: string,
+  criteria: readonly string[],
+  guidance?: string,
+): Record<string, unknown> {
+  return Object.fromEntries(entries.map(entry => [entry.id, {
+    type: "score",
+    instructions: {
+      question: "How strongly does `item` satisfy `ordering_rule`?",
+      item: entry.item,
+      ordering_rule: orderingRule,
+      guidance: guidance ?? "Use relevant knowledge and the shared anchored scale. Judge this item independently.",
+    },
+    criteria,
+  }]));
+}
+
+/** Create a TypeSafe-backed semantic sorter. */
+export function createJevClient(config: JevClientConfig = {}): JevClient {
+  const client = new TypeSafeClient(toSdkConfig(config) as never);
+  const model = config.model ?? "jev-latest";
+
+  async function compare<T>(
+    pairs: readonly { id: string; left: T; right: T }[],
+    orderingRule: string,
+    state: Readonly<Record<string, unknown>> | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<Readonly<Record<string, "left" | "right">>> {
+    const pairState = Object.fromEntries(pairs.map(pair => [pair.id, { item_a: pair.left, item_b: pair.right }]));
+    const response = await client.systemOne({
+      model,
+      state: { ...(config.state ?? {}), ...(state ?? {}), ordering_rule: orderingRule, pairs: pairState },
+      questions: pairQuestions(pairs),
+    } as never, { signal } as never);
+    const answers = response.answers as Record<string, { choice?: unknown }>;
+    return Object.fromEntries(pairs.map(pair => {
+      const choice = answers[pair.id]?.choice;
+      if (choice !== "left" && choice !== "right") throw new Error(`TypeSafe returned an invalid choice for ${pair.id}`);
+      return [pair.id, choice];
+    }));
+  }
+
+  async function runScore<T>(items: readonly T[], orderingRule: string, options: JevScoreOptions = {}) {
+    const criteria = options.criteria ?? DEFAULT_CRITERIA;
+    if (criteria.length < 2) throw new RangeError("criteria must contain at least two ordered score anchors");
+    return scoreSort(items, async (entries, context) => {
+      const response = await client.systemOne({
+        model,
+        state: { ...(config.state ?? {}), ...(options.state ?? {}), ordering_rule: orderingRule },
+        questions: scoreQuestions(entries, orderingRule, criteria, options.guidance),
+      } as never, { signal: context.signal } as never);
+      const answers = response.answers as Record<string, { type?: unknown; score?: unknown; confidence?: unknown }>;
+      return Object.fromEntries(entries.map(entry => {
+        const answer = answers[entry.id];
+        if (!answer || !Number.isFinite(answer.score)) throw new Error(`TypeSafe returned an invalid score for ${entry.id}`);
+        return [entry.id, { score: answer.score as number, ...(Number.isFinite(answer.confidence) ? { confidence: answer.confidence as number } : {}) } satisfies ScoreValue];
       }));
-    };
+    }, options);
   }
 
-  const defaultSerialize = <T>(item: T): JsonValue => item as JsonValue;
+  return {
+    jevSort: runScore,
+    scoreSort: runScore,
+    quickSort<T>(items: readonly T[], orderingRule: string, options: JevQuickSortOptions<T> = {}) {
+      const comparator: BatchComparator<T> = (pairs, context) => compare(pairs, orderingRule, options.state, context.signal);
+      return quickSort(items, comparator, options);
+    },
+    bitonicSort<T>(items: readonly T[], orderingRule: string, options: JevSortOptions<T> = {}) {
+      const comparator: BatchComparator<T> = (pairs, context) => compare(pairs, orderingRule, options.state, context.signal);
+      return bitonicSort(items, comparator, options);
+    },
+  };
+}
 
-  async function jevSort<T>(items: readonly T[], orderingRule: string, sortOptions: JevSortOptions<T> = {}) {
-    const { serialize = defaultSerialize<T>, instructions = DEFAULT_INSTRUCTIONS, maxBatchSize = 255, ...algorithmOptions } = sortOptions;
-    if (maxBatchSize > 255) throw new RangeError("TypeSafe Choice requests support at most 255 comparisons per batch");
-    return quickSortAlgorithm(items, comparator(orderingRule, serialize, instructions), { ...algorithmOptions, maxBatchSize });
-  }
-
-  async function bitonicSort<T>(items: readonly T[], orderingRule: string, sortOptions: JevBitonicSortOptions<T> = {}) {
-    const { serialize = defaultSerialize<T>, instructions = DEFAULT_INSTRUCTIONS, maxBatchSize = 255, ...algorithmOptions } = sortOptions;
-    if (maxBatchSize > 255) throw new RangeError("TypeSafe Choice requests support at most 255 comparisons per batch");
-    return bitonicSortAlgorithm(items, comparator(orderingRule, serialize, instructions), { ...algorithmOptions, maxBatchSize });
-  }
-
-  return { jevSort, quickSort: jevSort, bitonicSort };
+/** One-shot fast semantic sort using TypeSafe Jev Score. */
+export async function jevSort<T>(
+  items: readonly T[],
+  orderingRule: string,
+  options: JevScoreOptions & JevClientConfig = {},
+): Promise<SortResult<T, SortStats>> {
+  const { apiKey, model, baseUrl, fetch, headers, state: clientState, ...sortOptions } = options;
+  return createJevClient({ apiKey, model, baseUrl, fetch, headers, state: clientState }).jevSort(items, orderingRule, sortOptions);
 }

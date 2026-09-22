@@ -1,131 +1,100 @@
-# jev sort
+# jev-sort
 
-**Sort any list of any size by any criteria.**
+Semantic sorting with TypeSafe Jev.
 
-Powered by [Jev](https://typesafe.ai).
+The high-level client scores each item independently against one anchored rubric, then sorts the numeric scores in ordinary code. This takes **O(n) Jev judgments** and batches naturally. The package also keeps the original pairwise quicksort and bitonic network for cases where relative comparisons matter more than throughput.
+
+## Install
 
 ```bash
 npm install jev-sort
 ```
 
-Set your TypeSafe API key in the server environment:
+Use Node 18 or newer and set `TYPESAFE_API_KEY`, or pass `apiKey` explicitly.
 
-```bash
-export TYPESAFE_API_KEY="your-key"
-```
+## Fast semantic sort
 
-Then sort any JSON-safe dataset with one natural-language rule:
+```js
+import { createJevClient } from "jev-sort";
 
-```ts
-import { createJevClient } from 'jev-sort';
+const jev = createJevClient();
 
-const { jevSort } = createJevClient({
-  apiKey: process.env.TYPESAFE_API_KEY,
-});
-
-const tickets = [
-  { id: 'a', text: 'The export button is the wrong color.' },
-  { id: 'b', text: 'Every invoice is being charged twice.' },
-  { id: 'c', text: 'I cannot reset my password.' },
-];
-
-const result = await jevSort(
-  tickets,
-  'most urgent even if the customer sounds calm',
+const result = await jev.jevSort(
+  startups,
+  "most likely to become a durable independent company",
+  {
+    criteria: [
+      "Exceptionally weak fit for the ordering rule.",
+      "Clearly below-average fit.",
+      "Mixed or roughly average fit.",
+      "Clearly above-average fit.",
+      "Exceptional fit for the ordering rule.",
+    ],
+  },
 );
 
 console.log(result.items);
 console.log(result.stats);
+// { algorithm: "score", judgments: startups.length, ... }
 ```
 
-That is the complete Jev integration. The package uses TypeSafe's official SDK internally and owns question construction, parallel batching, authentication, retries, response parsing, and sorting. Keep the key on the server; never ship it in browser code.
+`jev.jevSort()` and `jev.scoreSort()` are aliases. They default to batches of 350 with four requests in flight. Override these when row size or API limits differ:
 
-`createJevClient()` also reads `TYPESAFE_API_KEY` automatically, so this works after setting the environment variable:
-
-```ts
-const { jevSort } = createJevClient();
-```
-
-## Algorithms
-
-Parallel quicksort is the default because it usually uses fewer Jev calls and rounds:
-
-```ts
-const { jevSort, quickSort } = createJevClient({ apiKey });
-
-await jevSort(items, orderingRule);  // quicksort
-await quickSort(items, orderingRule); // explicit alias
-```
-
-Use the fixed bitonic sorting network when predictable wave count and regular batches matter more than inference cost:
-
-```ts
-const { bitonicSort } = createJevClient({ apiKey });
-
-await bitonicSort(items, orderingRule);
-```
-
-- Parallel quicksort: expected $$O(n\log n)$$ comparisons and roughly $$O(\log n)$$ depth with balanced pivots
-- Bitonic sort: $$O(n\log^2 n)$$ comparisons and $$O(\log^2 n)$$ fixed depth
-
-## Customizing what Jev sees
-
-Items must be JSON-safe. Use `serialize` to omit private, irrelevant, or large fields:
-
-```ts
-await jevSort(emails, 'deserves attention soonest', {
-  serialize(email) {
-    return {
-      from: email.from,
-      subject: email.subject,
-      snippet: email.snippet,
-    };
-  },
+```js
+await jev.jevSort(rows, rule, {
+  maxBatchSize: 250,
+  concurrency: 8,
+  signal,
 });
 ```
 
-A TypeSafe Choice request supports up to 255 questions. The client automatically chunks larger rounds and runs those chunks concurrently. You can choose a smaller batch:
+Use concrete domain anchors when ranking quality matters. Every batch uses the same rubric, which keeps scores comparable across a large collection.
 
-```ts
-await jevSort(items, rule, { maxBatchSize: 64 });
+## Pairwise precision path
+
+For criteria that are difficult to score absolutely, use the retained pairwise quicksort:
+
+```js
+const result = await jev.quickSort(rows, "best response to the user's request");
 ```
 
-## Progress and cancellation
+This can distinguish close alternatives more directly, but needs roughly **O(n log n)** Jev judgments. The fixed-network implementation remains at `jev.bitonicSort()`.
 
-```ts
-const controller = new AbortController();
+## Low-level primitives
 
-const result = await jevSort(items, rule, {
-  signal: controller.signal,
-  onWave({ wave, totalWaves, items }) {
-    console.log({ wave, totalWaves, items });
-  },
+You can supply your own scorer without using the TypeSafe client:
+
+```js
+import { scoreSort } from "jev-sort";
+
+const result = await scoreSort(rows, async entries => {
+  return Object.fromEntries(
+    entries.map(entry => [entry.id, { score: myScore(entry.item) }]),
+  );
 });
 ```
 
-`totalWaves` is known for bitonic sort and undefined for adaptive quicksort.
+The root default export is the low-level Score sorter:
 
-## Low-level algorithm API
-
-If you use another decision provider or want full control over TypeSafe requests, import the provider-agnostic algorithms directly:
-
-```ts
-import quickSort from 'jev-sort/quicksort';
-import bitonicSort from 'jev-sort/bitonic';
+```js
+import scoreSort from "jev-sort";
 ```
 
-Both accept a batched comparator that returns `"left"` or `"right"` for every pair ID. The package root also defaults to the low-level quicksort function:
+Pairwise quicksort is available as the named `quickSort` export.
 
-```ts
-import quickSort from 'jev-sort';
+## Why Score is the high-level default
+
+For 1,000,000 rows:
+
+- Independent Score: 1,000,000 Jev judgments
+- Comparison sorting: roughly 20–30 million pairwise judgments
+
+The final numeric sort is still O(n log n), but it happens locally and is usually negligible beside model calls. Pairwise sorting remains useful for refining a small top set or resolving close ties.
+
+## Development
+
+```bash
+npm test
+npm run typecheck
+npm run pack:check
 ```
-
-See [`examples/typesafe-http.mjs`](./examples/typesafe-http.mjs) for the simple first-party client example.
-
-## Semantic comparator caveat
-
-Natural-language preferences can be uncertain or non-transitive: A may beat B, B may beat C, and C may beat A. An algorithm still returns an order, but quicksort and bitonic sort can produce different nearby ranks because they ask different pairs. Treat the result as a judgment under the supplied rule, not objective truth.
-
-## License
-
-MIT
