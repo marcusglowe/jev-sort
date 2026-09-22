@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import jevSort, { bitonicSort, quickSort, bitonicNetwork, paddedSize } from '../dist/index.js';
+import jevSort, { bitonicSort, quickSort, bitonicNetwork, createJevClient, paddedSize } from '../dist/index.js';
 import quickSortSubpath from '../dist/quicksort.js';
 import bitonicSortSubpath from '../dist/bitonic.js';
 
@@ -64,6 +64,37 @@ test('validates pivot selection', async () => {
 test('rejects malformed answers in both algorithms', async () => {
   await assert.rejects(quickSort([2,1], async () => ({})), /must return "left" or "right"/);
   await assert.rejects(bitonicSort([2,1], async () => ({})), /must return "left" or "right"/);
+});
+
+test('jev client turns quicksort rounds into SDK-owned TypeSafe requests', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, init) => {
+    assert.equal(init.headers.Authorization, 'Bearer secret');
+    assert.match(String(url), /\/v1\/systemone$/);
+    const body = JSON.parse(init.body); requests.push(body);
+    const answers = Object.fromEntries(Object.entries(body.state.pairs).map(([id, pair]) => [id, { choice: pair.item_a.value <= pair.item_b.value ? 'left' : 'right' }]));
+    return new Response(JSON.stringify({ model: 'jev-test', answers, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const { jevSort: semanticSort, bitonicSort: semanticBitonic } = createJevClient({ apiKey: 'secret' });
+    const values = [{value:4},{value:1},{value:3},{value:2}];
+    const quick = await semanticSort(values, 'smallest first');
+    const bitonic = await semanticBitonic(values, 'smallest first');
+    assert.deepEqual(quick.items.map(x=>x.value), [1,2,3,4]);
+    assert.deepEqual(bitonic.items.map(x=>x.value), [1,2,3,4]);
+    assert.ok(requests.every(body => body.model === 'jev-latest' && body.state.ordering_rule === 'smallest first'));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('jev client validates TypeSafe configuration and responses', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ model: 'jev-test', answers: {}, usage: { input_tokens: 1, output_tokens: 1 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  try {
+    const client = createJevClient({ apiKey: 'x' });
+    await assert.rejects(client.jevSort([2,1], 'smallest first'), /invalid choice/);
+    await assert.rejects(client.jevSort([2,1], 'smallest first', { maxBatchSize: 256 }), /at most 255/);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test('honors an aborted signal', async () => {

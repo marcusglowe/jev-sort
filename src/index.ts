@@ -1,6 +1,9 @@
 import quickSort from "./quicksort.js";
 
-/** Default algorithm: adaptive parallel quicksort. */
+export { createJevClient } from "./client.js";
+export type { JevBitonicSortOptions, JevClient, JevClientOptions, JevSortOptions } from "./client.js";
+
+/** Default low-level algorithm: adaptive parallel quicksort. */
 export default quickSort;
 export { quickSort } from "./quicksort.js";
 export type { QuickSortOptions, QuickSortStats } from "./quicksort.js";

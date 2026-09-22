@@ -2,7 +2,14 @@
   "name": "jev-sort",
   "version": "0.1.0",
   "description": "Parallel semantic sorting with quicksort and bitonic algorithms.",
-  "keywords": ["jev", "typesafe", "semantic-sort", "sorting-network", "bitonic-sort", "ai"],
+  "keywords": [
+    "jev",
+    "typesafe",
+    "semantic-sort",
+    "sorting-network",
+    "bitonic-sort",
+    "ai"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -14,7 +21,12 @@
   },
   "type": "module",
   "sideEffects": false,
-  "files": ["dist", "examples", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -36,6 +48,14 @@
     "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm test"
   },
-  "engines": {"node": ">=18"},
-  "devDependencies": {"typescript": "^5.9.3"}
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.5.7"
+  }
 }
