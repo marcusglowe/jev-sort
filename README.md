@@ -8,6 +8,16 @@ You provide one batched asynchronous comparator that decides which item in each 
 npm install jev-sort
 ```
 
+## TypeSafe API key
+
+`jev-sort` is provider-agnostic and does not read credentials itself. To use it with Jev, create a TypeSafe API key and set it only in your server environment:
+
+```bash
+export TYPESAFE_API_KEY="your-key"
+```
+
+Never put the key in browser code or a public environment variable. Your server-side comparator sends each parallel batch to TypeSafe.
+
 ## Algorithms
 
 ```ts
@@ -31,17 +41,47 @@ const tickets = [
   { id: 'c', text: 'I cannot reset my password.' },
 ];
 
+const orderingRule = 'most urgent even if the customer sounds calm';
+
 const result = await jevSort(tickets, async pairs => {
-  // Send every pair in this parallel round to Jev in one request.
-  // Return "left" when pair.left belongs earlier, or "right" otherwise.
-  return callJev(pairs, 'most urgent even if the customer sounds calm');
+  const response = await fetch('https://api.typesafe.ai/v1/systemone', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${process.env.TYPESAFE_API_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'jev-latest',
+      state: {
+        ordering_rule: orderingRule,
+        pairs: Object.fromEntries(pairs.map(pair => [pair.id, {
+          item_a: pair.left,
+          item_b: pair.right,
+        }])),
+      },
+      questions: Object.fromEntries(pairs.map(pair => [pair.id, {
+        type: 'choice',
+        instructions: 'Which item belongs earlier according to `ordering_rule`?',
+        criteria: {
+          left: 'Item A belongs earlier.',
+          right: 'Item B belongs earlier.',
+        },
+      }])),
+    }),
+  });
+
+  if (!response.ok) throw new Error(`TypeSafe returned ${response.status}`);
+  const payload = await response.json();
+  return Object.fromEntries(
+    pairs.map(pair => [pair.id, payload.answers[pair.id].choice]),
+  );
 });
 
 console.log(result.items);
 console.log(result.stats);
 ```
 
-See [`examples/typesafe-http.mjs`](./examples/typesafe-http.mjs) for a complete Jev HTTP integration.
+See [`examples/typesafe-http.mjs`](./examples/typesafe-http.mjs) for the runnable version.
 
 ## Comparator contract
 
