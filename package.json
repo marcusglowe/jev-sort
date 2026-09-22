@@ -1,7 +1,7 @@
 {
   "name": "jev-sort",
   "version": "0.1.0",
-  "description": "Parallel semantic sorting with a fixed bitonic comparison network.",
+  "description": "Parallel semantic sorting with quicksort and bitonic algorithms.",
   "keywords": ["jev", "typesafe", "semantic-sort", "sorting-network", "bitonic-sort", "ai"],
   "license": "MIT",
   "repository": {
@@ -21,6 +21,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./quicksort": {
+      "types": "./dist/quicksort.d.ts",
+      "import": "./dist/quicksort.js"
+    },
+    "./bitonic": {
+      "types": "./dist/bitonic.d.ts",
+      "import": "./dist/bitonic.js"
     }
   },
   "scripts": {

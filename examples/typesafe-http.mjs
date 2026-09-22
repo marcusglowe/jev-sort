@@ -1,4 +1,4 @@
-import { jevSort } from 'jev-sort';
+import jevSort from 'jev-sort';
 
 const emails = [
   { subject: 'Production is down', snippet: 'The API has failed for ten minutes.' },

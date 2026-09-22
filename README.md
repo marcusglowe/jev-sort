@@ -1,19 +1,29 @@
 # jev sort
 
-Parallel semantic sorting with a fixed bitonic comparison network.
+Parallel semantic sorting for data without a useful numeric key.
 
-`jev-sort` orders data that has no useful numeric key. You provide one batched asynchronous comparator that decides which item in each pair belongs earlier. The package owns the fixed network, power-of-two padding, parallel layers, answer validation, and compare-and-swaps.
-
-It was designed for [Jev](https://typesafe.ai), TypeSafe's System One decision model, but it works with any pairwise comparator.
+You provide one batched asynchronous comparator that decides which item in each pair belongs earlier. `jev-sort` owns the algorithm, parallel rounds, answer validation, and data movement. It was designed for [Jev](https://typesafe.ai), TypeSafe's System One decision model, but works with any pairwise comparator.
 
 ```bash
 npm install jev-sort
 ```
 
+## Algorithms
+
+```ts
+import jevSort from 'jev-sort';             // parallel quicksort, the default
+import quickSort from 'jev-sort/quicksort'; // same adaptive algorithm
+import bitonicSort from 'jev-sort/bitonic'; // fixed sorting network
+```
+
+**Parallel quicksort** is the default. It usually uses fewer comparisons and rounds: expected $$O(n\log n)$$ comparisons and roughly $$O(\log n)$$ depth with balanced pivots.
+
+**Bitonic sort** has a fixed, predictable execution graph and maximizes regular parallelism: $$O(n\log^2 n)$$ comparisons and $$O(\log^2 n)$$ depth.
+
 ## Usage
 
 ```ts
-import { jevSort } from 'jev-sort';
+import jevSort from 'jev-sort';
 
 const tickets = [
   { id: 'a', text: 'The export button is the wrong color.' },
@@ -22,36 +32,70 @@ const tickets = [
 ];
 
 const result = await jevSort(tickets, async pairs => {
-  // Send this whole layer to Jev in one request. Each question returns
-  // "left" when pair.left belongs earlier, or "right" otherwise.
+  // Send every pair in this parallel round to Jev in one request.
+  // Return "left" when pair.left belongs earlier, or "right" otherwise.
   return callJev(pairs, 'most urgent even if the customer sounds calm');
 });
 
 console.log(result.items);
 console.log(result.stats);
-// { inputSize: 3, paddedSize: 4, waves: 3, comparisons: ..., batchCalls: ... }
 ```
 
 See [`examples/typesafe-http.mjs`](./examples/typesafe-http.mjs) for a complete Jev HTTP integration.
 
 ## Comparator contract
 
-The comparator receives every independent comparison in the current network layer:
+Both algorithms use the same comparator:
 
 ```ts
 async function compareBatch(pairs, context) {
   return Object.fromEntries(
-    pairs.map(pair => [pair.id, pair.left.rank <= pair.right.rank ? 'left' : 'right']),
+    pairs.map(pair => [
+      pair.id,
+      pair.left.rank <= pair.right.rank ? 'left' : 'right',
+    ]),
   );
 }
 ```
 
-It must return one `"left"` or `"right"` winner for every pair ID. A winner means “belongs earlier,” regardless of the bitonic network's internal direction. Keep the semantic rule stable for an entire sort.
+It must return one `"left"` or `"right"` winner for every pair ID. A winner means “belongs earlier.” Keep the semantic rule stable for the entire sort.
 
-All comparisons in a layer are independent and can run in parallel. If a layer is too large for one model request, set `maxBatchSize`; chunks in the layer are still invoked concurrently:
+Every comparison supplied in one round is independent. If a round is too large for one model request, `maxBatchSize` splits it into chunks that are still invoked concurrently:
 
 ```ts
 await jevSort(items, compareBatch, { maxBatchSize: 64 });
+```
+
+## Choosing an algorithm
+
+Use the default quicksort for most applications:
+
+```ts
+import jevSort from 'jev-sort';
+```
+
+Use bitonic sort when fixed wave count and predictable batches matter more than inference cost:
+
+```ts
+import bitonicSort from 'jev-sort/bitonic';
+
+const result = await bitonicSort(items, compareBatch);
+```
+
+Use the explicit quicksort subpath when an import should document the choice:
+
+```ts
+import quickSort from 'jev-sort/quicksort';
+```
+
+Quicksort accepts a deterministic pivot policy:
+
+```ts
+await quickSort(items, compareBatch, {
+  choosePivot(partition) {
+    return Math.floor(partition.length / 2);
+  },
+});
 ```
 
 ## Progress and cancellation
@@ -62,45 +106,29 @@ const controller = new AbortController();
 const result = await jevSort(items, compareBatch, {
   signal: controller.signal,
   onWave({ wave, totalWaves, items }) {
-    console.log(`${wave + 1}/${totalWaves}`, items);
+    console.log({ wave, totalWaves, items });
   },
 });
 ```
 
-## Complexity
-
-For padded size $$m=2^k$$:
-
-- Parallel layers: $$k(k+1)/2$$, or $$O(\log^2 n)$$
-- Comparison slots: $$mk(k+1)/4$$, or $$O(n\log^2 n)$$
-- Memory: $$O(n)$$
-- Comparisons within one layer can run concurrently
-
-The fixed network is predictable and highly parallel. Adaptive algorithms such as parallel quicksort usually use fewer comparisons, but have input-dependent depth and partition balance.
+`totalWaves` is known for bitonic sort and undefined for adaptive quicksort.
 
 ## Semantic comparator caveat
 
-Natural-language preferences can be uncertain or non-transitive: A may beat B, B may beat C, and C may beat A. A sorting network still returns an order, but different valid sorting algorithms can produce different nearby ranks. Treat the result as a judgment under the supplied comparator, not objective truth.
+Natural-language preferences can be uncertain or non-transitive: A may beat B, B may beat C, and C may beat A. A sorting algorithm still returns an order, but quicksort and bitonic sort can produce different nearby ranks because they ask different pairs. Treat the result as a judgment under the supplied comparator, not objective truth.
 
-## API
+## Exports
 
-### `jevSort(input, compareBatch, options?)`
+Root:
 
-Returns `{ items, stats }`.
+- default `quickSort`
+- named `quickSort`, `bitonicSort`, `bitonicNetwork`, `paddedSize`
+- shared TypeScript types
 
-Options:
+Subpaths:
 
-- `maxBatchSize`: maximum comparisons per comparator call
-- `signal`: `AbortSignal`
-- `onWave`: callback after each completed parallel layer
-
-### `bitonicNetwork(size)`
-
-Returns the fixed comparison layers for a power-of-two size.
-
-### `paddedSize(n)`
-
-Returns the next power of two, with a minimum of one.
+- `jev-sort/quicksort`
+- `jev-sort/bitonic`
 
 ## License
 
